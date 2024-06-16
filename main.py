@@ -9,6 +9,7 @@ subprocess.run(['gdown', '--id', '1CE240jLm2npU-tdz81-oVKEF3T2yfT1O', '--output'
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
 import numpy as np
 import csv
 import os
@@ -119,18 +120,65 @@ def plot_pred(dv_set, model, device, lim=35., preds=None, targets=None):
     plt.title('Ground Truth v.s. Prediction')
     plt.show()
 
+class ResidualBlock(nn.Module):
+    def __init__(self, input_dim):
+        super(ResidualBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.Linear(input_dim, input_dim),
+            nn.BatchNorm1d(input_dim),
+            nn.ReLU(),
+            nn.Linear(input_dim, input_dim),
+            nn.BatchNorm1d(input_dim)
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
+
+class Attention(nn.Module):
+    def __init__(self, input_dim):
+        super(Attention, self).__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, x):
+        attn_weights = F.softmax(self.attention(x), dim=1)
+        return (x * attn_weights).sum(dim=1)
+
 class NeuralNet(nn.Module):
     def __init__(self, input_dim):
         super(NeuralNet, self).__init__()
+        self.input_dim = input_dim
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
+            nn.Linear(input_dim, 128),
+            nn.BatchNorm1d(128),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.5),
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.5),
+            ResidualBlock(64),
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.5),
+            nn.Linear(32, input_dim),
+            nn.BatchNorm1d(input_dim),
+            nn.LeakyReLU(0.1)
         )
+        self.attention = Attention(input_dim)
+        self.fc = nn.Linear(input_dim, 1)
         self.criterion = nn.MSELoss(reduction='mean')
 
     def forward(self, x):
-        return self.net(x).squeeze(1)
+        x = self.net(x)
+        x = x.view(-1, self.input_dim)  # 確保 x 的形狀與 input_dim 匹配
+        x = self.attention(x)
+        x = self.fc(x)
+        return x.squeeze(1)
 
     def cal_loss(self, pred, target):
         return self.criterion(pred, target)
